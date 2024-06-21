@@ -7,13 +7,17 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.model.meta import get_field_precision
 from frappe.model.naming import set_name_from_naming_options
+from frappe.query_builder.functions import IfNull, Sum
 from frappe.utils import flt, fmt_money
 
 import erpnext
 from erpnext.accounts.doctype.accounting_dimension.accounting_dimension import (
 	get_checks_for_pl_and_bs_accounts,
 )
-from erpnext.accounts.party import validate_party_frozen_disabled, validate_party_gle_currency
+from erpnext.accounts.party import (
+	validate_party_frozen_disabled,
+	validate_party_gle_currency,
+)
 from erpnext.accounts.utils import get_account_currency, get_fiscal_year
 from erpnext.exceptions import InvalidAccountCurrency
 
@@ -91,7 +95,7 @@ class GLEntry(Document):
 		if not self.flags.from_repost and self.voucher_type != "Period Closing Voucher":
 			self.validate_account_details(adv_adj)
 			self.validate_dimensions_for_pl_and_bs()
-			validate_balance_type(self.account, adv_adj)
+			validate_balance_type(self.account, adv_adj, self.finance_book)
 			validate_frozen_account(self.account, adv_adj)
 
 			if (
@@ -281,7 +285,10 @@ class GLEntry(Document):
 		if account_currency != self.account_currency:
 			frappe.throw(
 				_("{0} {1}: Accounting Entry for {2} can only be made in currency: {3}").format(
-					self.voucher_type, self.voucher_no, self.account, (account_currency or company_currency)
+					self.voucher_type,
+					self.voucher_no,
+					self.account,
+					(account_currency or company_currency),
 				),
 				InvalidAccountCurrency,
 			)
@@ -299,16 +306,20 @@ class GLEntry(Document):
 		frappe.throw(msg)
 
 
-def validate_balance_type(account, adv_adj=False):
+def validate_balance_type(account, adv_adj=False, finance_book=None):
 	if not adv_adj and account:
 		balance_must_be = frappe.get_cached_value("Account", account, "balance_must_be")
 		if balance_must_be:
-			balance = frappe.db.sql(
-				"""select sum(debit) - sum(credit)
-				from `tabGL Entry` where account = %s""",
-				account,
-			)[0][0]
+			gl = frappe.qb.DocType("GL Entry")
+			finance_book = finance_book or ""
+			query = (
+				frappe.qb.from_(gl)
+				.select(Sum(gl.debit) - Sum(gl.credit))
+				.where(gl.account == account)
+				.where(IfNull(gl.finance_book, "") == "")
+			)
 
+			balance = query.run(debug=True)[0][0]
 			if (balance_must_be == "Debit" and flt(balance) < 0) or (
 				balance_must_be == "Credit" and flt(balance) > 0
 			):
