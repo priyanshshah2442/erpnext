@@ -311,21 +311,27 @@ def validate_balance_type(account, adv_adj=False, finance_book=None):
 		balance_must_be = frappe.get_cached_value("Account", account, "balance_must_be")
 		if balance_must_be:
 			gl = frappe.qb.DocType("GL Entry")
-			finance_book = finance_book or ""
 			query = (
 				frappe.qb.from_(gl)
-				.select(Sum(gl.debit) - Sum(gl.credit))
+				.select(Sum(gl.debit) - Sum(gl.credit), gl.finance_book)
 				.where(gl.account == account)
-				.where(IfNull(gl.finance_book, "") == "")
 			)
+			if finance_book:
+				query = query.where(gl.finance_book == finance_book)
+			else:
+				query = query.groupby(gl.finance_book)
 
-			balance = query.run(debug=True)[0][0]
-			if (balance_must_be == "Debit" and flt(balance) < 0) or (
-				balance_must_be == "Credit" and flt(balance) > 0
-			):
-				frappe.throw(
-					_("Balance for Account {0} must always be {1}").format(account, _(balance_must_be))
-				)
+			balances = query.run()
+
+			for row in balances:
+				if (balance_must_be == "Debit" and flt(row[0]) < 0) or (
+					balance_must_be == "Credit" and flt(row[0]) > 0
+				):
+					frappe.throw(
+						_("Balance for Account {0} must always be {1} for Finance Book {2}").format(
+							account, _(balance_must_be), row[1]
+						)
+					)
 
 
 def update_outstanding_amt(
