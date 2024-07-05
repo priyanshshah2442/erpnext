@@ -17,6 +17,7 @@ class TestGLEntry(unittest.TestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
+		create_finance_books()
 
 	def test_round_off_entry(self):
 		frappe.db.set_value("Company", "_Test Company", "round_off_account", "_Test Write Off - _TC")
@@ -87,9 +88,36 @@ class TestGLEntry(unittest.TestCase):
 		self.assertEqual(old_naming_series_current_value + 2, new_naming_series_current_value)
 
 	def test_validate_balance_type(self):
-		make_journal_entry("_Test Fixed Asset", "_Test Bank", -100.00, submit=True)
+		frappe.db.set_value("Account", "_Test Fixed Asset - _TC", "balance_must_be", "Debit")
+
+		je = make_journal_entry("_Test Fixed Asset - _TC", "_Test Bank - _TC", 1000, save=False)
+		je.finance_book = "Financial Accounting"
+		je.insert()
+		je.submit()
+
+		financial_accounting_je = make_journal_entry(
+			"_Test Fixed Asset - _TC", "_Test Bank - _TC", -500, save=False
+		)
+		financial_accounting_je.finance_book = "Financial Accounting"
+		financial_accounting_je.insert()
+		financial_accounting_je.submit()
+
+		tax_accounting_je = make_journal_entry(
+			"_Test Fixed Asset - _TC", "_Test Bank - _TC", -500, save=False
+		)
+		tax_accounting_je.finance_book = "Tax Accounting"
+		tax_accounting_je.insert()
 
 		self.assertRaisesRegex(
 			frappe.ValidationError,
-			re.compile(r"^(Balance for Account .* must always be Credit)"),
+			re.compile(r"^(Balance for Account.*must always be Debit)"),
+			tax_accounting_je.submit,
 		)
+
+
+def create_finance_books():
+	for finance_book in ["Financial Accounting", "Tax Accounting"]:
+		if not frappe.db.exists("Finance Book", finance_book):
+			fb = frappe.new_doc("Finance Book")
+			fb.finance_book_name = finance_book
+			fb.insert()
