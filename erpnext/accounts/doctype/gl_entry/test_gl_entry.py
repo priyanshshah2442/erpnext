@@ -1,7 +1,7 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
 
-
+import re
 import unittest
 
 import frappe
@@ -10,8 +10,14 @@ from frappe.model.naming import parse_naming_series
 from erpnext.accounts.doctype.gl_entry.gl_entry import rename_gle_sle_docs
 from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
 
+test_dependencies = ["Company", "Account"]
+
 
 class TestGLEntry(unittest.TestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+
 	def test_round_off_entry(self):
 		frappe.db.set_value("Company", "_Test Company", "round_off_account", "_Test Write Off - _TC")
 		frappe.db.set_value("Company", "_Test Company", "round_off_cost_center", "_Test Cost Center - _TC")
@@ -79,3 +85,11 @@ class TestGLEntry(unittest.TestCase):
 			"SELECT current from tabSeries where name = %s", naming_series
 		)[0][0]
 		self.assertEqual(old_naming_series_current_value + 2, new_naming_series_current_value)
+
+	def test_validate_balance_type(self):
+		make_journal_entry("_Test Fixed Asset", "_Test Bank", -100.00, submit=True)
+
+		self.assertRaisesRegex(
+			frappe.ValidationError,
+			re.compile(r"^(Balance for Account .* must always be Credit)"),
+		)
