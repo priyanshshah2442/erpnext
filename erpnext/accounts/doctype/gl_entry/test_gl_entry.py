@@ -7,6 +7,7 @@ import unittest
 import frappe
 from frappe.model.naming import parse_naming_series
 
+from erpnext.accounts.doctype.account.test_account import create_account
 from erpnext.accounts.doctype.gl_entry.gl_entry import rename_gle_sle_docs
 from erpnext.accounts.doctype.journal_entry.test_journal_entry import make_journal_entry
 
@@ -85,13 +86,27 @@ class TestGLEntry(unittest.TestCase):
 	def test_validate_balance_type(self):
 		account1_name = "_Test Finance Books"
 		account2_name = "_Test Bank"
-		account1 = account1_name + " - _TC"
-		account2 = account2_name + " - _TC"
 
-		if not frappe.db.exists("Account", {"account_name": account1_name, "company": "_Test Company"}):
-			create_test_account(account1_name)
+		account1 = frappe.db.get_value("Account", {"account_name": account1_name, "company": "_Test Company"})
+		account2 = frappe.db.get_value("Account", {"account_name": account2_name, "company": "_Test Company"})
+
+		if not account1:
+			parent_account = frappe.db.get_value(
+				"Account", {"account_name": "Current Assets", "company": "_Test Company"}
+			)
+			account1 = create_account(
+				**{
+					"account_name": account1_name,
+					"parent_account": parent_account,
+					"company": "_Test Company",
+					"is_group": 0,
+					"account_type": "Fixed Asset",
+					"account_currency": "INR",
+					"balance_must_be": "Debit",
+				}
+			)
 		else:
-			clear_previous_balances(account1)
+			clear_account_balance(account1)
 
 		make_journal_entry(account1, account2, 1000, submit=True)
 
@@ -116,22 +131,6 @@ class TestGLEntry(unittest.TestCase):
 		)
 
 
-def create_test_account(account_name):
-	account = frappe.new_doc("Account")
-	account.update(
-		{
-			"account_name": account_name,
-			"parent_account": "Current Assets",
-			"company": "_Test Company",
-			"is_group": 0,
-			"account_type": "Fixed Asset",
-			"account_currency": "INR",
-			"balance_must_be": "Debit",
-		}
-	)
-	account.insert()
-
-
-def clear_previous_balances(account_name):
+def clear_account_balance(account_name):
 	gl = frappe.qb.DocType("GL Entry")
 	frappe.qb.from_(gl).delete().where(gl.account == account_name).run()
