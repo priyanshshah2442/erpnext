@@ -84,43 +84,38 @@ class TestGLEntry(unittest.TestCase):
 		self.assertEqual(old_naming_series_current_value + 2, new_naming_series_current_value)
 
 	def test_validate_balance_type(self):
-		account1_name = "_Test Finance Books"
-		account2_name = "_Test Bank"
+		fixed_asset_account_name = "_Test Fixed Asset (with FB)"
+		bank_account = "_Test Bank - _TC"
 
-		account1 = frappe.db.get_value("Account", {"account_name": account1_name, "company": "_Test Company"})
-		account2 = frappe.db.get_value("Account", {"account_name": account2_name, "company": "_Test Company"})
+		fixed_asset_account = frappe.db.get_value(
+			"Account", {"account_name": fixed_asset_account_name, "company": "_Test Company"}
+		)
 
-		if not account1:
-			parent_account = frappe.db.get_value(
-				"Account", {"account_name": "Current Assets", "company": "_Test Company"}
+		if not fixed_asset_account:
+			fixed_asset_account = create_account(
+				account_name=fixed_asset_account_name,
+				parent_account="Fixed Assets - _TC",
+				company="_Test Company",
+				is_group=0,
+				account_type="Fixed Asset",
 			)
-			account1 = create_account(
-				**{
-					"account_name": account1_name,
-					"parent_account": parent_account,
-					"company": "_Test Company",
-					"is_group": 0,
-					"account_type": "Fixed Asset",
-					"account_currency": "INR",
-					"balance_must_be": "Debit",
-				}
-			)
+			frappe.db.set_value("Account", fixed_asset_account, "balance_must_be", "Debit")
 		else:
-			clear_account_balance(account1)
+			clear_account_balance(fixed_asset_account)
 
-		make_journal_entry(account1, account2, 1000, submit=True)
+		make_journal_entry(fixed_asset_account, bank_account, 1000, submit=True)
 
-		financial_accounting_je = make_journal_entry(account1, account2, -1000, save=False)
+		financial_accounting_je = make_journal_entry(fixed_asset_account, bank_account, -1000, save=False)
 		financial_accounting_je.finance_book = "Financial Accounting"
 		financial_accounting_je.insert()
 		financial_accounting_je.submit()
 
-		tax_accounting_je1 = make_journal_entry(account1, account2, -500, save=False)
+		tax_accounting_je1 = make_journal_entry(fixed_asset_account, bank_account, -500, save=False)
 		tax_accounting_je1.finance_book = "Tax Accounting"
 		tax_accounting_je1.insert()
 		tax_accounting_je1.submit()
 
-		tax_accounting_je2 = make_journal_entry(account1, account2, -600, save=False)
+		tax_accounting_je2 = make_journal_entry(fixed_asset_account, bank_account, -600, save=False)
 		tax_accounting_je2.finance_book = "Tax Accounting"
 		tax_accounting_je2.insert()
 
