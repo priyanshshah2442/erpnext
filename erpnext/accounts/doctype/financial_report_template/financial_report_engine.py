@@ -72,6 +72,7 @@ class AccountData:
 	"""Account data across all periods"""
 
 	account_name: str
+	account_number: str = ""
 	period_values: dict[str, PeriodValue] = field(default_factory=dict)
 
 	def add_period(self, period_value: PeriodValue) -> None:
@@ -103,7 +104,7 @@ class AccountData:
 			# movement is unaccumulated by default
 
 	def copy(self):
-		copied = AccountData(account_name=self.account_name)
+		copied = AccountData(account_name=self.account_name, account_number=self.account_number)
 		copied.period_values = {k: v.copy() for k, v in self.period_values.items()}
 		return copied
 
@@ -465,19 +466,33 @@ class FinancialQueryBuilder:
 		Returns:
 		    dict: {account: AccountData}
 		"""
-		balances_data = self._get_opening_balances(accounts)
+		account_numbers = self._get_account_numbers(accounts)
+		balances_data = self._get_opening_balances(accounts, account_numbers)
 		gl_data = self._get_gl_movements(accounts)
-		self._calculate_running_balances(balances_data, gl_data)
+		self._calculate_running_balances(balances_data, gl_data, account_numbers)
 		self._handle_balance_accumulation(balances_data)
 
 		return balances_data
 
-	def _get_opening_balances(self, accounts: list[str]) -> dict[str, dict[str, dict[str, float]]]:
+	def _get_account_numbers(self, accounts: list[str]) -> dict[str, str]:
+		"""Fetch account numbers for the given accounts"""
+		account_table = frappe.qb.DocType("Account")
+		query = (
+			frappe.qb.from_(account_table)
+			.select(account_table.name, account_table.account_number)
+			.where(account_table.name.isin(accounts))
+		)
+		results = query.run(as_dict=True)
+		return {row["name"]: row.get("account_number") or "" for row in results}
+
+	def _get_opening_balances(
+		self, accounts: list[str], account_numbers: dict[str, str]
+	) -> dict[str, dict[str, dict[str, float]]]:
 		"""
 		Return opening balances for *all accounts* defaulting to zero.
 		"""
 		if frappe.get_single_value("Accounts Settings", "ignore_account_closing_balance"):
-			return self._get_opening_balances_from_gl(accounts)
+			return self._get_opening_balances_from_gl(accounts, account_numbers)
 
 		first_period_start = getdate(self.periods[0]["from_date"])
 		last_closing_voucher = frappe.db.get_all(
@@ -497,9 +512,11 @@ class FinancialQueryBuilder:
 			closing_data = self._get_closing_balances(accounts, closing_voucher.name)
 
 			if sum(closing_data.values()) != 0.0:
-				return self._rebase_closing_balances(closing_data, closing_voucher.period_end_date)
+				return self._rebase_closing_balances(
+					closing_data, closing_voucher.period_end_date, account_numbers
+				)
 
-		return self._get_opening_balances_from_gl(accounts)
+		return self._get_opening_balances_from_gl(accounts, account_numbers)
 
 	def _get_closing_balances(self, account_names: list[str], closing_voucher: str) -> dict[str, float]:
 		closing_balances = {account: 0.0 for account in account_names}
@@ -525,7 +542,7 @@ class FinancialQueryBuilder:
 		return closing_balances
 
 	def _rebase_closing_balances(
-		self, closing_data: dict[str, float], closing_date: str
+		self, closing_data: dict[str, float], closing_date: str, account_numbers: dict[str, str]
 	) -> dict[str, dict[str, dict[str, float]]]:
 		balances_data = {}
 
@@ -543,20 +560,20 @@ class FinancialQueryBuilder:
 			gap_movement = gap_movements.get(account, 0.0)
 			opening_balance = closing_balance + gap_movement
 
-			account_data = AccountData(account)
+			account_data = AccountData(account, account_numbers.get(account, ""))
 			account_data.add_period(PeriodValue(first_period_key, opening_balance, 0, 0))
 			balances_data[account] = account_data
 
 		return balances_data
 
-	def _get_opening_balances_from_gl(self, accounts: list[str]) -> dict:
+	def _get_opening_balances_from_gl(self, accounts: list[str], account_numbers: dict[str, str]) -> dict:
 		# Simulate zero closing balances
 		zero_closing_balances = {account: 0.0 for account in accounts}
 
 		# Use a very early date
 		earliest_date = "1900-01-01"
 
-		return self._rebase_closing_balances(zero_closing_balances, earliest_date)
+		return self._rebase_closing_balances(zero_closing_balances, earliest_date, account_numbers)
 
 	def _get_gap_movements(self, account_names: list[str], from_date: str, to_date: str) -> dict[str, float]:
 		gl_table = frappe.qb.DocType("GL Entry")
@@ -609,11 +626,13 @@ class FinancialQueryBuilder:
 		query = self._apply_standard_filters(query, gl_table)
 		return self._execute_with_permissions(query, "GL Entry")
 
-	def _calculate_running_balances(self, balances_data: dict, gl_data: list[dict]) -> dict:
+	def _calculate_running_balances(
+		self, balances_data: dict, gl_data: list[dict], account_numbers: dict[str, str]
+	) -> dict:
 		for row in gl_data:
 			account = row["account"]
 			if account not in balances_data:
-				balances_data[account] = AccountData(account)
+				balances_data[account] = AccountData(account, account_numbers.get(account, ""))
 
 			account_data: AccountData = balances_data[account]
 
@@ -1555,6 +1574,7 @@ class RowFormatterBase(ABC):
 			"account": getattr(row_data.row, "display_name", "") or "",
 			"indent": getattr(row_data.row, "indentation_level", 0),
 			"account_name": getattr(row_data.row, "account", "") or "",
+			"account_number": getattr(row_data.row, "account_number", "") or "",
 			"currency": self.context.currency or "",
 			"period_start_date": getattr(self.context.filters, "period_start_date", "") or "",
 			"period_end_date": getattr(self.context.filters, "period_end_date", "") or "",
@@ -1690,6 +1710,12 @@ class DetailRowBuilder:
 	def _create_detail_row_object(self, account_name: str, parent_row):
 		short_name = account_name.rsplit(" - ", 1)[0].strip()
 
+		# Get account_number from account_details
+		account_number = ""
+		if self.parent_row_data.account_details and account_name in self.parent_row_data.account_details:
+			account_data = self.parent_row_data.account_details[account_name]
+			account_number = getattr(account_data, "account_number", "")
+
 		return type(
 			"DetailRow",
 			(),
@@ -1697,6 +1723,7 @@ class DetailRowBuilder:
 				"display_name": short_name,
 				"account": account_name,
 				"account_name": short_name,
+				"account_number": account_number,
 				"data_source": "Account Detail",
 				"indentation_level": getattr(parent_row, "indentation_level", 0) + 1,
 				"fieldtype": getattr(parent_row, "fieldtype", None),
